@@ -467,7 +467,7 @@
             <circle cx="13" cy="13" r="11" fill="none" stroke="rgba(31,42,36,0.12)" stroke-width="3"/>
             <circle id="mctClockRing" cx="13" cy="13" r="11" fill="none" stroke="var(--gold-dark)" stroke-width="3" stroke-linecap="round" transform="rotate(-90 13 13)"/>
           </svg>
-          <span class="mono" id="mctClockText">5</span>
+          <span class="mono" id="mctClockText">15</span>
         </div>
         <div class="mct-change mono" id="mctChange">+0.00%</div>
       </div>
@@ -476,7 +476,13 @@
       <canvas id="mctChart" width="900" height="420" style="width:100%;height:220px;background:#fff;border-radius:10px;border:1px solid var(--line);display:block;touch-action:none;"></canvas>
       <button class="mct-live-btn" id="mctLiveBtn" onclick="mctResetToLive()" style="display:none;">↦ Kembali ke Live</button>
     </div>
-    <div style="font-size:9.5px;color:var(--ink-faint);text-align:center;margin:5px 0 8px;flex:none;">Geser grafik kiri/kanan buat liat histori harga</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin:5px 0 8px;flex:none;">
+      <div style="font-size:9.5px;color:var(--ink-faint);">Geser grafik buat liat histori</div>
+      <div style="display:flex;gap:4px;">
+        <button onclick="mctSetChartMode('line')" id="btnChartLine" style="font-size:9px;padding:3px 8px;border-radius:6px;border:1px solid var(--line);background:#fff;">Garis</button>
+        <button onclick="mctSetChartMode('candle')" id="btnChartCandle" style="font-size:9px;padding:3px 8px;border-radius:6px;border:1px solid var(--gold);background:#FFF7E5;font-weight:700;">Candle</button>
+      </div>
+    </div>
 
     <div id="mctScrollArea" style="flex:1;overflow-y:auto;min-height:0;">
       <div id="mctNoIdentity" style="display:none;font-size:12px;color:var(--ink-soft);text-align:center;padding:16px 0;">Pilih dulu kamu siapa (Menu → Ganti Peran) buat mulai trading.</div>
@@ -1755,13 +1761,14 @@ async function doQRTransfer(){
 
 /* ================= MCT (FOREX SIMULATOR) ================= */
 const MCT_BASE_EPOCH = new Date('2026-01-01T00:00:00Z').getTime();
-const MCT_INTERVAL_MS = 5000; // panjang 1 candle = 5 detik
+const MCT_INTERVAL_MS = 15000; // panjang 1 candle = 15 detik
 const MCT_BASE_PRICE = 1000;
 const MCT_SVG_UP = '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;"><path d="M12 5L4 19H20Z"/></svg>';
 const MCT_SVG_DOWN = '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;"><path d="M4 5H20L12 19Z"/></svg>';
 let mctLeverage = 1;
 let mctTimer = null;
 let mctWaveCache = null; // cache komponen gelombang per roomCode biar gak dihitung ulang tiap frame
+let mctChartMode = 'candle'; // 'candle' atau 'line'
 
 function hashStr(str){
   let h = 2166136261;
@@ -1785,12 +1792,29 @@ function mctGetWaveComponents(roomCode){
   if(mctWaveCache && mctWaveCache.roomCode === roomCode) return mctWaveCache.comps;
   const rnd = mulberry32(hashStr(roomCode + ':mct-wave'));
   const comps = [
-    { amp: 0.10 + rnd()*0.06,  period: 2400 + rnd()*3600, phase: rnd()*Math.PI*2 }, // tren pelan (jam-an)
-    { amp: 0.045 + rnd()*0.03, period: 180  + rnd()*300,  phase: rnd()*Math.PI*2 }, // ombak menengah (menit-an)
-    { amp: 0.02 + rnd()*0.015, period: 15   + rnd()*20,   phase: rnd()*Math.PI*2 }, // riak cepat (detik-an)
+    { amp: 0.12 + rnd()*0.08,  period: 2400 + rnd()*3600, phase: rnd()*Math.PI*2 }, // tren pelan
+    { amp: 0.06 + rnd()*0.05,  period: 180  + rnd()*300,  phase: rnd()*Math.PI*2 }, // ombak menengah
+    { amp: 0.03 + rnd()*0.03,  period: 20   + rnd()*30,   phase: rnd()*Math.PI*2 }, // riak cepat
+    // Komponen "Tricky": Kadang ada spike tajam atau pembalikan mendadak
+    { amp: 0.04 + rnd()*0.06,  period: 45   + rnd()*60,   phase: rnd()*Math.PI*2, tricky: true }
   ];
   mctWaveCache = { roomCode, comps };
   return comps;
+}
+
+function mctLogPriceAt(roomCode, tSec){
+  const comps = mctGetWaveComponents(roomCode);
+  let v = 0;
+  for(const c of comps) {
+    let wave = Math.sin((2*Math.PI*tSec/c.period) + c.phase);
+    if(c.tricky) {
+      // Bikin gelombang lebih "tajam" dan gak simetris (tricky)
+      wave = Math.pow(Math.abs(wave), 0.5) * Math.sign(wave);
+      if(Math.sin(tSec/100) > 0.8) wave *= -2; // Kadang balik arah mendadak
+    }
+    v += c.amp * wave;
+  }
+  return v;
 }
 function mctLogPriceAt(roomCode, tSec){
   const comps = mctGetWaveComponents(roomCode);
@@ -2006,6 +2030,13 @@ function renderMCTPanel(){
   controls.forEach(el => el.disabled = maxed);
 }
 
+function mctSetChartMode(mode){
+  mctChartMode = mode;
+  document.getElementById('btnChartLine').style.cssText = mode==='line' ? 'font-size:9px;padding:3px 8px;border-radius:6px;border:1px solid var(--gold);background:#FFF7E5;font-weight:700;' : 'font-size:9px;padding:3px 8px;border-radius:6px;border:1px solid var(--line);background:#fff;';
+  document.getElementById('btnChartCandle').style.cssText = mode==='candle' ? 'font-size:9px;padding:3px 8px;border-radius:6px;border:1px solid var(--gold);background:#FFF7E5;font-weight:700;' : 'font-size:9px;padding:3px 8px;border-radius:6px;border:1px solid var(--line);background:#fff;';
+  renderMCTPanel();
+}
+
 function drawCandles(candles, isLive){
   const canvas = document.getElementById('mctChart');
   if(!canvas) return;
@@ -2032,17 +2063,41 @@ function drawCandles(candles, isLive){
   }
 
   const cw = w / candles.length;
-  candles.forEach((c, i) => {
-    const x = i*cw + cw/2;
-    const yO = toY(c.open), yC = toY(c.close), yH = toY(c.high), yL = toY(c.low);
-    const up = c.close >= c.open;
-    const col = up ? '#2F7A4F' : '#A63D2F';
-    ctx.strokeStyle = col; ctx.fillStyle = col;
-    ctx.lineWidth = 1.4;
-    ctx.beginPath(); ctx.moveTo(x, yH); ctx.lineTo(x, yL); ctx.stroke();
-    const bodyTop = Math.min(yO,yC), bodyH = Math.max(Math.abs(yC-yO), 1.5);
-    ctx.fillRect(x-cw*0.32, bodyTop, cw*0.64, bodyH);
-  });
+  
+  if(mctChartMode === 'line'){
+    ctx.strokeStyle = 'var(--gold)';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    candles.forEach((c, i) => {
+      const x = i*cw + cw/2;
+      const y = toY(c.close);
+      if(i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+    
+    // Area di bawah garis
+    ctx.lineTo((candles.length-1)*cw + cw/2, h);
+    ctx.lineTo(cw/2, h);
+    ctx.closePath();
+    const grad = ctx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, 'rgba(184,145,47,0.2)');
+    grad.addColorStop(1, 'rgba(184,145,47,0)');
+    ctx.fillStyle = grad;
+    ctx.fill();
+  } else {
+    candles.forEach((c, i) => {
+      const x = i*cw + cw/2;
+      const yO = toY(c.open), yC = toY(c.close), yH = toY(c.high), yL = toY(c.low);
+      const up = c.close >= c.open;
+      const col = up ? '#2F7A4F' : '#A63D2F';
+      ctx.strokeStyle = col; ctx.fillStyle = col;
+      ctx.lineWidth = 1.4;
+      ctx.beginPath(); ctx.moveTo(x, yH); ctx.lineTo(x, yL); ctx.stroke();
+      const bodyTop = Math.min(yO,yC), bodyH = Math.max(Math.abs(yC-yO), 1.5);
+      ctx.fillRect(x-cw*0.32, bodyTop, cw*0.64, bodyH);
+    });
+  }
 
   // garis harga terakhir, gaya platform forex (putus-putus + label)
   const cp = candles[candles.length-1].close;
